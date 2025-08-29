@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>30天运动记录本（GitHub Pages 版）</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  :root{
+    --bg:#f6f7fb; --card:#ffffff; --muted:#6b7280; --line:#e5e7eb; --brand:#2563eb; --brand-weak:#93c5fd;
+  }
+  *{box-sizing:border-box}
+  body{font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; background:var(--bg); margin:0; color:#111827}
+  header{position:sticky; top:0; z-index:10; backdrop-filter:saturate(180%) blur(10px); background:rgba(255,255,255,.85); border-bottom:1px solid var(--line)}
+  .wrap{max-width:1100px; margin:0 auto; padding:16px}
+  h1{margin:0 0 8px; font-size: clamp(20px, 2.5vw, 28px)}
+  .grid{display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:8px}
+  label{display:flex; align-items:center; gap:8px; background:var(--card); border:1px solid var(--line); padding:10px 12px; border-radius:10px}
+  input, select, button{font:inherit}
+  input[type=number], input[type=date], select{width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff}
+  .actions{display:flex; flex-wrap:wrap; gap:8px; margin-top:8px}
+  button{padding:9px 12px; border-radius:10px; border:1px solid var(--line); background:#fff; cursor:pointer}
+  .btn-primary{background:var(--brand); color:#fff; border-color: var(--brand)}
+  .btn-outline{background:#fff; color:#111; border:1px solid var(--line)}
+  main{max-width:1100px; margin:18px auto; padding:0 16px}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:12px}
+  table{width:100%; border-collapse:collapse; font-size:14px}
+  thead th{position:sticky; top:0; background:#fafafa; z-index:1}
+  th, td{border-bottom:1px solid var(--line); padding:8px; text-align:center}
+  tfoot td{font-weight:700; background:#f3f4f6}
+  .hint{color:var(--muted); font-size:12px}
+  .kpi{display:flex; gap:12px; flex-wrap:wrap; margin:8px 0 0}
+  .kpi .pill{background:#f8fafc; border:1px solid var(--line); padding:6px 10px; border-radius:999px; font-size:12px}
+  canvas{max-width:100%; margin:12px 0}
+  .sticky-tools{position:sticky; bottom:8px; display:flex; gap:8px; justify-content:flex-end; padding:8px 0}
+</style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>30天运动记录本（GitHub Pages 版）</h1>
+      <div class="grid" id="profileInputs">
+        <label>身高(cm)<input type="number" id="height" min="80" max="250" step="1" value="170"/></label>
+        <label>年龄<input type="number" id="age" min="5" max="110" step="1" value="30"/></label>
+        <label>性别<select id="gender"><option value="male">男</option><option value="female">女</option></select></label>
+        <label>目标体重(kg)<input type="number" id="targetWeight" min="20" max="300" step="0.1" value="65"/></label>
+      </div>
+      <div class="actions">
+        <button class="btn-outline" id="resetBtn">清空本地数据</button>
+        <button class="btn-primary" id="shareBtn">生成当前页面可分享链接</button>
+        <span class="hint">说明：数据仅保存在当前设备浏览器（localStorage）。</span>
+      </div>
+      <div class="kpi" id="topKpi"></div>
+    </div>
+  </header>
+
+  <main>
+    <section class="card">
+      <div style="overflow:auto">
+        <table id="recordTable" aria-label="30天记录">
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>早晨步行(公里)</th>
+              <th>全天步行(公里)</th>
+              <th>总步数</th>
+              <th>消耗(千卡)</th>
+              <th>体重(kg)</th>
+              <th>体重变化(kg)</th>
+              <th>体重状态</th>
+              <th>预计达成(天)</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+          <tfoot>
+            <tr>
+              <td>本月总结</td>
+              <td id="sumMorning">0</td>
+              <td id="sumDistance">0</td>
+              <td id="sumSteps">0</td>
+              <td id="sumCalories">0</td>
+              <td>-</td><td>-</td><td>-</td><td>-</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div class="sticky-tools">
+        <button class="btn-outline" id="recalcBtn">全部重算</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 style="margin:4px 0 8px">图表展示</h3>
+      <canvas id="weightChart" height="160"></canvas>
+      <canvas id="caloriesChart" height="160"></canvas>
+    </section>
+
+    <p class="hint" style="margin:12px 4px">
+      提示：步长按性别估算（男 0.415×身高，女 0.413×身高）；消耗按 <b>≈1 千卡/(kg·km)</b> 粗略估算。
+    </p>
+  </main>
+
+<script>
+/************
+ * 基础状态 *
+ ************/
+const DAYS = 30;
+const $ = (sel, root=document) => root.querySelector(sel);
+const $$ = (sel, root=document) => Array.from(root.querySelectorAll(sel));
+const state = {
+  height: 170, age: 30, gender: 'male', targetWeight: 65,
+  records: Array.from({length: DAYS}, (_,i)=>({ day: i+1, date: '', morningDistance: 0, totalDistance: 0,
+    totalSteps: 0, calories: 0, weight: 0, weightChange: 0, weightStatus: '', targetDays: 0 }))
+};
+
+function clamp(n, min, max){ return Math.min(Math.max(n, min), max); }
+function format1(n){ return (Math.round(n*10)/10).toFixed(1); }
+function saveLocal(){ localStorage.setItem('fitness30', JSON.stringify(state)); }
+function loadLocal(){
+  try{ const s=localStorage.getItem('fitness30'); if(s){ Object.assign(state, JSON.parse(s)); }}catch(e){}
+}
+
+/*****************
+ * 计算/推导函数  *
+ *****************/
+function stepLengthMeters(heightCm, gender){ const k = gender === 'female' ? 0.413 : 0.415; return (heightCm * k) / 100; }
+function calcSteps(distanceKm, heightCm, gender){ const sl = stepLengthMeters(heightCm, gender) || 0.7; return distanceKm>0 ? Math.round(distanceKm*1000 / sl) : 0; }
+function calcCalories(distanceKm, weightKg){ return (distanceKm>0 && weightKg>0) ? Math.round(weightKg * distanceKm * 1) : 0; }
+function bmiStatus(heightCm, weightKg){
+  if(heightCm<=0 || weightKg<=0) return {bmi:0, status:''};
+  const h = heightCm/100; const bmi = weightKg/(h*h);
+  return {bmi, status: bmi<18.5?'偏瘦':(bmi<24?'正常':(bmi<28?'超重':'肥胖'))};
+}
+function daysToTarget(current, target){
+  if(current<=0 || target<=0) return 0;
+  const remain = current - target; if(remain <= 0) return 0;
+  const weeklyRate = 0.5; // ~0.5 kg/周
+  return Math.ceil((remain/weeklyRate) * 7);
+}
+
+/************
+ * 构建表格 *
+ ************/
+function buildRows(){
+  const tbody = $('#tbody'); tbody.innerHTML='';
+  for(let i=1;i<=DAYS;i++){
+    const r = state.records[i-1];
+    const tr = document.createElement('tr'); tr.dataset.day = i;
+    tr.innerHTML = `
+      <td><input type="date" class="recordDate" value="${r.date||''}"></td>
+      <td><input type="number" class="morningDistance" min="0" step="0.01" value="${r.morningDistance}"></td>
+      <td><input type="number" class="totalDistance" min="0" step="0.01" value="${r.totalDistance}"></td>
+      <td class="totalSteps">${r.totalSteps}</td>
+      <td class="calories">${r.calories}</td>
+      <td><input type="number" class="weight" min="0" step="0.1" value="${r.weight}"></td>
+      <td class="weightChange">${format1(r.weightChange||0)}</td>
+      <td class="weightStatus">${r.weightStatus||''}</td>
+      <td class="targetDays">${r.targetDays||0}</td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function bindEvents(){
+  // 头部输入
+  ['height','age','gender','targetWeight'].forEach(id=>{
+    $('#'+id).addEventListener('change', e=>{
+      let v = e.target.value;
+      if(id==='height') state.height = clamp(parseFloat(v)||170, 80, 250);
+      if(id==='age') state.age = clamp(parseInt(v)||30, 5, 110);
+      if(id==='gender') state.gender = v;
+      if(id==='targetWeight') state.targetWeight = clamp(parseFloat(v)||65, 20, 300);
+      recalcAll(); saveLocal();
+    });
+  });
+  // 行输入（委托）
+  $('#tbody').addEventListener('change', (e)=>{
+    const tr = e.target.closest('tr'); if(!tr) return;
+    const day = parseInt(tr.dataset.day); const idx = day-1; const r = state.records[idx];
+    r.date = tr.querySelector('.recordDate').value || '';
+    r.morningDistance = parseFloat(tr.querySelector('.morningDistance').value)||0;
+    r.totalDistance = parseFloat(tr.querySelector('.totalDistance').value)||0;
+    r.weight = parseFloat(tr.querySelector('.weight').value)||0;
+    updateRow(day); saveLocal();
+  });
+  // 按钮
+  $('#resetBtn').addEventListener('click', ()=>{
+    if(confirm('清空当前浏览器本地数据？此操作不可撤销。')){ localStorage.removeItem('fitness30'); location.reload(); }
+  });
+  $('#recalcBtn').addEventListener('click', ()=>{ recalcAll(); saveLocal(); });
+  $('#shareBtn').addEventListener('click', ()=>{
+    // 生成携带当前状态的分享链接（通过 URL hash，避免超长 query 且不触发网络请求）
+    try{
+      const data = btoa(unescape(encodeURIComponent(JSON.stringify(state))));
+      const url = location.origin + location.pathname + '#s=' + data;
+      navigator.clipboard.writeText(url).then(()=> alert('已复制分享链接，可在其他设备打开：\\n' + url));
+    }catch(err){ alert('生成链接失败：' + err.message); }
+  });
+}
+
+/************
+ * 图表逻辑 *
+ ************/
+let weightChart, caloriesChart;
+function initCharts(){
+  const weightCtx = $('#weightChart').getContext('2d');
+  const caloriesCtx = $('#caloriesChart').getContext('2d');
+  const labels = Array.from({length:DAYS}, (_,i)=>`Day ${i+1}`);
+  weightChart = new Chart(weightCtx, {
+    type:'line',
+    data:{labels, datasets:[{label:'体重(kg)', data: state.records.map(r=>r.weight||0), borderColor:'#2563eb', fill:false, tension:.2}]},
+    options:{responsive:true, plugins:{legend:{display:true}}}
+  });
+  caloriesChart = new Chart(caloriesCtx, {
+    type:'bar',
+    data:{labels, datasets:[{label:'每日消耗(千卡)', data: state.records.map(r=>r.calories||0), backgroundColor:'#93c5fd'}]},
+    options:{responsive:true, plugins:{legend:{display:true}}}
+  });
+}
+function updateCharts(){
+  for(let i=0;i<DAYS;i++){
+    weightChart.data.datasets[0].data[i] = state.records[i].weight || 0;
+    caloriesChart.data.datasets[0].data[i] = state.records[i].calories || 0;
+  }
+  weightChart.update();
+  caloriesChart.update();
+}
+
+/************
+ * 汇总/KPI  *
+ ************/
+function updateSummaryAndKPI(){
+  let sumMorning=0,sumDist=0,sumSteps=0,sumCalories=0, lastWeight=0, firstWeight=0;
+  for(const r of state.records){
+    sumMorning += r.morningDistance||0;
+    sumDist += r.totalDistance||0;
+    sumSteps += r.totalSteps||0;
+    sumCalories += r.calories||0;
+  }
+  $('#sumMorning').textContent = format1(sumMorning);
+  $('#sumDistance').textContent = format1(sumDist);
+  $('#sumSteps').textContent = sumSteps;
+  $('#sumCalories').textContent = sumCalories;
+
+  const weights = state.records.map(r=>r.weight).filter(w=>w>0);
+  if(weights.length){ firstWeight = weights[0]; lastWeight = weights[weights.length-1]; }
+  const diff = lastWeight && firstWeight ? (lastWeight-firstWeight) : 0;
+  const {bmi} = bmiStatus(state.height, lastWeight||0);
+  $('#topKpi').innerHTML = `
+    <span class="pill">累计距离：<b>${format1(sumDist)}</b> km</span>
+    <span class="pill">累计步数：<b>${sumSteps.toLocaleString()}</b></span>
+    <span class="pill">累计消耗：<b>${sumCalories.toLocaleString()}</b> 千卡</span>
+    <span class="pill">体重变化：<b>${format1(diff)}</b> kg</span>
+    <span class="pill">当前BMI：<b>${bmi?format1(bmi):'-'}</b></span>`;
+}
+
+/************
+ * 行级计算 *
+ ************/
+function updateRow(day){
+  const idx = day-1; const r = state.records[idx];
+  r.totalSteps = calcSteps(r.totalDistance||0, state.height||170, state.gender||'male');
+  r.calories = calcCalories(r.totalDistance||0, r.weight||0);
+  let prev = 0; for(let i=idx-1;i>=0;i--){ if(state.records[i].weight>0){ prev = state.records[i].weight; break; }}
+  r.weightChange = r.weight>0 && prev>0 ? (r.weight - prev) : 0;
+  const {status} = bmiStatus(state.height, r.weight||0); r.weightStatus = status;
+  r.targetDays = daysToTarget(r.weight||0, state.targetWeight||r.weight||0);
+
+  const tr = $$(`tr[data-day="${day}"]`)[0];
+  tr.querySelector('.totalSteps').textContent = r.totalSteps;
+  tr.querySelector('.calories').textContent = r.calories;
+  tr.querySelector('.weightChange').textContent = format1(r.weightChange||0);
+  tr.querySelector('.weightStatus').textContent = r.weightStatus||'';
+  tr.querySelector('.targetDays').textContent = r.targetDays||0;
+
+  updateSummaryAndKPI();
+  updateCharts();
+}
+
+function recalcAll(){
+  for(let i=1;i<=DAYS;i++){
+    const tr = $$(`tr[data-day="${i}"]`)[0];
+    const r = state.records[i-1];
+    if(tr){
+      r.date = tr.querySelector('.recordDate').value || '';
+      r.morningDistance = parseFloat(tr.querySelector('.morningDistance').value)||0;
+      r.totalDistance = parseFloat(tr.querySelector('.totalDistance').value)||0;
+      r.weight = parseFloat(tr.querySelector('.weight').value)||0;
+    }
+    updateRow(i);
+  }
+  saveLocal();
+}
+
+/********************
+ * 分享链接：导入态 *
+ ********************/
+function tryLoadFromHash(){
+  // #s=<base64(json)>
+  if(location.hash && location.hash.startsWith('#s=')){
+    try{
+      const data = decodeURIComponent(escape(atob(location.hash.slice(3))));
+      const incoming = JSON.parse(data);
+      // 用传入 state 覆盖当前，但不立即写 localStorage
+      Object.assign(state, incoming || {});
+    }catch(e){ console.warn('解析分享链接失败：', e); }
+  }
+}
+
+/********
+ * 启动 *
+ ********/
+(function start(){
+  loadLocal();
+  tryLoadFromHash();
+  // 头部
+  $('#height').value = state.height; $('#age').value = state.age;
+  $('#gender').value = state.gender; $('#targetWeight').value = state.targetWeight;
+  // 表格/事件/图表
+  buildRows(); bindEvents(); initCharts(); recalcAll();
+})();
+</script>
+</body>
+</html>
